@@ -1,0 +1,293 @@
+---
+title: "qPCR template for Calculating primer efficiencies"
+author: "Adrija Kalvisa"
+date: "28/01/2020"
+output: 
+  html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Experimental setup:
+Experiment ID:  
+Date of running qPCR:  
+Primers:  
+Master mix composition:  
+qPCR setup:  
+
+### About this analysis
+
+The sample loading schemes usually are in a "wide" format (imitating the 96 or 384 well PCR plate layout) while the Cp values are obtained in a "long" format. In order to avoid time-consuming and error-prone manual conversion from one format to another, this script provides a framework to automatize merging the Calculated Cp values with sample IDs.
+
+## Step 1: Calculate primer efficiencies
+
+This part you have to change:
+
+```{r}
+#pathToSampleLayout = "qPCR SMARCE1 Molm13.xlsx"
+#pathToCpValues = "SMARCE1_Lightcycler480_output.txt"
+
+# if the file is in the same folder as this script then you can provide only the sample name. 
+pathToSampleLayout = "12Sept2019-validation primers test.xlsx"
+pathToCpValues = "primer_validation_Cp_values.txt"
+
+referencePrimers="B2M" 
+```
+
+The rest of the script should work without your supervision. I suggest, however, double checking that the right bits are asigned to "primer", "treatment", "biological_replicate", "technical_replicate" and "primer_ratio" columns. This bit can be modifoed in 'Load Sample Layout' section. 
+
+### Libraries
+```{r, message=FALSE, results='hide'}
+library(readxl)
+
+#install.packages("platetools")
+library(platetools) 
+
+#install.packages("pcr")
+library(pcr)
+
+# install.packages(“ggplot2”)
+library(ggplot2)
+
+# install.packages("viridis")
+library(viridis)
+
+# install.packages(“reshape2”)
+library(reshape2)   
+
+# install.packages("dplyr")
+library(dplyr)
+
+# install.packages("tidyr")
+library(tidyr)
+```
+
+### Custom-made functions
+
+`entry2columns(my_column, list_of_informative_cathegories, separator_string)`  
+separates sample information into relevant user-specified cathegories ("primer", "treatment", "biological_replicate", "technical_replicate", "primer_ratio").
+
+```{r entry2columns, echo=FALSE}
+entry2columns = function(my_column, list_of_informative_cathegories, separator_string){
+
+  # this line splits the "my_column" into n columns of selected cathegories. n = number of selected cathegories, 1-5
+  columns = 
+    stringr::str_split_fixed(my_column, separator_string, length(list_of_informative_cathegories))
+  
+  # rename columns so that they are consistent with downstream analysis
+  colnames(columns) = list_of_informative_cathegories
+    
+  return(columns)
+  
+}
+```
+
+`transformWellNumbers(posString)` turns numbers "A1"" "B2" "C3" to "A01" "B02" "C03".
+```{r transformWellNumbers, echo=FALSE}
+transformWellNumbers = function(posString){
+  # Transforms A1 to A01 B1 to B01 (works for numbers < 10)
+  return(gsub("(?<![0-9])([0-9])(?![0-9])", "0\\1", posString, perl = TRUE)
+  )
+}
+```
+
+`readFromFile_CpValues(pathToFile)` reads the output .txt file from Lightcycler480 machine.
+```{r readFromFile_CpValues, echo=FALSE}
+readFromFile_CpValues = function(pathToFile){
+  # read the data from the given file path, assuming tab delimiter and comma as decimal separator. 
+  # the Well IDs should be stored in column "Pos", sample names in column "Name", Cp values in "Cp"
+  
+data = 
+  data.table::fread(
+    pathToFile, 
+    na.strings=NULL , 
+    dec=",", 
+    sep="\t", 
+    skip=1, 
+    select = c("Pos", "Name" ,"Cp"), 
+    data.table=FALSE
+    )
+
+  data$Pos = 
+  transformWellNumbers(data$Pos)
+
+  return(data)
+}
+```
+
+`readFromFile_SampleLayout(pathToFile)` reads a specifically formatted text file that contains sample layout information. 
+```{r readFromFile_SampleLayout, echo=FALSE}
+readFromFile_SampleLayout = function(pathToFile) {
+  
+  #load data from .txt file path
+  #tmp = 
+  #  read.delim(pathToFile,row.names = c("A", "B", "C", "D", "E", "F", "G", "H"))
+
+  # load data from .xls file path
+  output = 
+    read_excel(pathToFile, range = "B2:M10")
+  
+  row.names(output) = c("A", "B", "C", "D", "E", "F", "G", "H")
+    
+  # drop the first column containing rownames
+  #output = 
+  #  tmp[,-1]
+  
+  # rename the column names
+  colnames(output) = 
+    as.character(c(1:12))
+  
+  return(output)
+}
+```
+
+`plate2table(dataFrame)`
+transforms the sample layout from "wide" to "long" format.
+```{r plate2table, echo=FALSE}
+plate2table = function(wideDataFrame){
+  
+  # make the files into long format
+  long = melt(as.matrix(wideDataFrame))
+  
+  # add the position names, making sure they are 0-padded. this is important for platetools package
+  long$Pos = transformWellNumbers(paste0(long$Var1, long$Var2))
+  
+  return(long[,c("Pos", "value")])
+}
+```
+
+`meanWithoutNA` calculates means of Cp when some values are missing
+```{r meanWithoutNA, echo=FALSE}
+meanWithoutNA = function(x){
+  mean(x, na.rm=TRUE)
+  }
+
+countNA = function(x){
+  sum(is.na(x))
+  }
+```
+
+`ratio2conc("characterString")` turns primer ratio ("1:100") into relative primer concentration ("0.01")
+```{r ratio2conc, echo=FALSE}
+ratio2conc = function(ratioColumn){
+ as.numeric(stringr::str_split_fixed(ratioColumn, ":", 2)[,2])^-1
+}
+```
+
+
+### Load sample Layout
+
+```{r}
+# load sample layout
+primer_validation_sample_layout = readFromFile_SampleLayout(pathToSampleLayout)
+
+# turn sample layout into "long" list format
+sample_list = plate2table(primer_validation_sample_layout)
+
+# split the loading information into separate columns and add back to the long table
+sample_list = sample_list$value %>% entry2columns(c("primer", "primer_ratio"), " ") %>% cbind(sample_list)
+```
+
+`entry2columns(c("primer", "primer_ratio"), " ")` splits the column into two new columns by splitting the column where the space `"" "` is. Note that if you have several different delimiters, you can separate them with a `|` which means `OR`. For example, `"-| "` will be used to split "RNF141-1 1:100" into "RNF141" "1" "1:100".
+
+other examples for: 
+```{r}
+# ideally the column names should be some of the following:
+# "primer", "treatment", "biological_replicate", "technical_replicate", "primer_ratio"
+
+"PrimerABC_treatmentDEF_repGHI" %>% entry2columns(c("primer", "treatment", "biological_replicate"), "_")
+"PrimerABC-treatmentDEF repGHI" %>% entry2columns(c("primer", "treatment", "biological_replicate"), "-| ")
+"PrimerABC-treatmentDEF repGHI 1:100" %>% entry2columns(c("primer", "treatment", "biological_replicate", "primer_ratio"), "-| ")
+```
+
+
+```{r}
+# make sure that each well has an unique naming - I assume that identical come from "technical replicates"
+sample_list = 
+  sample_list %>%
+  group_by(primer, primer_ratio) %>%    
+  mutate(technical_replicate = row_number()) %>% 
+  select(-"value")
+```
+
+`group_by(primer, primer_ratio)` finds the unique combinations of primer+primer_ratio   
+`mutate(technical_replicate = row_number())` counts how many times these unique values were encountered and saves these counts in column named 'technical replicate'
+`select(-"value")` drops the column named 'value' from  sample_list because it has become redundant
+
+how does sample list look like?
+```{r}
+sample_list
+```
+
+show the Cp values in the plate layout
+```{r}
+# load Cp values
+primer_validation_Cp_values = readFromFile_CpValues(pathToCpValues)
+
+# show the plate layout
+platetools::raw_map(
+  data = primer_validation_Cp_values$Cp,
+  well = primer_validation_Cp_values$Pos) + 
+  ggtitle("primer validation example") +
+  theme_light() +
+  scale_fill_viridis()
+```
+
+```{r}
+# Merge Cp values with sample information
+Samples_Cp_long = 
+  merge(sample_list, primer_validation_Cp_values, by="Pos")
+
+# Extract dilution factor
+Samples_Cp_long$primer_conc = ratio2conc(Samples_Cp_long$primer_ratio)
+```
+
+what primers are tested?
+```{r}
+Samples_Cp_long$primer %>% as.character() %>% unique()
+```
+
+Make a data frame where each column contains one primer set and each row contains one sample (1 sample = 1 eppendorf tube)
+
+```{r}
+data_for_pcr_table = 
+  Samples_Cp_long[Samples_Cp_long$primer != referencePrimers, c("primer","technical_replicate","primer_conc","Cp")]
+
+pcr_table = 
+  tidyr::pivot_wider(
+  data = data_for_pcr_table,
+  names_from = primer,
+  values_from = Cp,
+  values_fn = list(Cp = meanWithoutNA)
+  ) %>% 
+  select(-"technical_replicate")
+```
+
+how does pcr table look like?
+```{r}
+pcr_table
+```
+
+Calculate and plot the efficacy using `qpcR::pcr_assess()` function
+```{r}
+pcr_assess(
+  df = pcr_table[,-1],
+  amount = pcr_table$primer_conc,
+  method = 'standard_curve')
+
+# plot the slope
+pcr_assess(
+ df = pcr_table[,-1],
+ amount = pcr_table$primer_conc,
+ method = 'standard_curve', 
+ plot=TRUE)
+```
+
+More analysis tips: 
+https://cran.r-project.org/web/packages/pcr/vignettes/qpcr_analysis.html
+
+## Further analysis
+More guidelines on analysing PCR results can be found in 
+[pcr package vignette](https://cran.r-project.org/web/packages/pcr/vignettes/qpcr_analysis.html)
