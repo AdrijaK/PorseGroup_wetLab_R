@@ -21,22 +21,28 @@ get list of chromosome names to ignore for normalisation (I will ignore sex chro
 wget -qO-  ftp://ftp.ncbi.nlm.nih.gov/genomes/genbank/vertebrate_mammalian/Mus_musculus/all_assembly_versions/GCA_000001635.8_GRCm38.p6/GCA_000001635.8_GRCm38.p6_assembly_report.txt | awk '{print $NF}' | grep 'random\|chrUn\|chrM\|chrX\|chrY' > ignoreForNormalization.txt
 ```
 
+(for manipulating blacklist you need bedtools. If you havent installed bedtools, install them via conda:)
+```bash
+conda create --yes -n bedtools -c bioconda bedtools
+conda activate bedtools
+```
+
 get a list of chromosome sizes for blacklist expansion with slopBed
 ```bash
 wget -qO- ftp://ftp.ncbi.nlm.nih.gov/genomes/genbank/vertebrate_mammalian/Mus_musculus/all_assembly_versions/GCA_000001635.8_GRCm38.p6/GCA_000001635.8_GRCm38.p6_assembly_report.txt | grep -v '^#' |  awk -v RS='\r\n' '{print $10"\t"$9}' | grep -v '^na'  > GRCm38.genome
 ```
 
-get blacklist for mouse and edit the regions so they dont overlap with each other and are expanded by 50 bp both ways
-(for expanding the regions you need bedtools. If you havent installed bedtools, install them via conda:
-```bash
-conda create --yes -n bedtools -c bioconda bedtools
-conda activate bedtools - activate environment containing bedtools
-```
-
 download the blacklist from https://github.com/Boyle-Lab/Blacklist/tree/master/lists
+edit the regions so they dont overlap with each other and are expanded by 50 bp both ways
 ```bash
 wget -qO- https://github.com/Boyle-Lab/Blacklist/blob/master/lists/mm10-blacklist.v2.bed.gz?raw=true | gunzip -c | sort -k1,1 -k2,2n | slopBed -i stdin -g GRCm38.genome -b 50 > mm10-blacklist.v2.bed
 ```
+
+Explanation:
+`wget -qO-` will read the file from url and print it to stdout instead of a file
+`gunzip -c` will unzip the file
+`sort -k1,1 -k2,2n` sort bed file by region before using bedtools
+`slopBed -i stdin -g GRCm38.genome -b 50` expands each blacklist peak by 50 bases, but takes into account chromosome sizes from `GRCm38.genome`
 
 activate snakePipes again to continue snakePiping
 ```bash
