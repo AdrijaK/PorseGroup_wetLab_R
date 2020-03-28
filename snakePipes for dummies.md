@@ -16,7 +16,7 @@ add conda environment to snakePipes configuration
 snakePipes config --snakemakeOptions " --use-conda --conda-prefix /localhome/inst/usr123/analysis/software/anaconda3/envs/snakePipes/"
 ```
 
-get list of chromosome names to ignore for normalisation (I will ignore sex chromosomes, non-canonical scaffolds and mtDNA)
+get list of chromosome names to ignore for normalization (I will ignore sex chromosomes, non-canonical scaffolds and mtDNA)
 ```bash
 wget -qO-  ftp://ftp.ncbi.nlm.nih.gov/genomes/genbank/vertebrate_mammalian/Mus_musculus/all_assembly_versions/GCA_000001635.8_GRCm38.p6/GCA_000001635.8_GRCm38.p6_assembly_report.txt | awk '{print $NF}' | grep 'random\|chrUn\|chrM\|chrX\|chrY' > ignoreForNormalization.txt
 ```
@@ -73,7 +73,7 @@ find where the defaults.yaml is located by entering
 snakePipes info
 ```
 
-open the `defaults.yaml` with any test editor. 
+open the `defaults.yaml` with any text editor. 
 change `tmpDir: /data/extended/` to `tmpDir: /localhome/inst/usr123/analysis/snakepipes_tmp/` or whatever your chosen tmpDir is. 
 
 Tada!
